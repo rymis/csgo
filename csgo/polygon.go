@@ -1,9 +1,5 @@
 package csgo
 
-import (
-	"slices"
-)
-
 type Polygon struct {
 	Vertices   []*Vertex
 	Plane      *Plane
@@ -36,6 +32,12 @@ func (p *Polygon) Flip() {
 	for _, v := range p.Vertices {
 		v.Flip(p.Plane)
 	}
-	slices.Reverse(p.Vertices)
+	// Reverse the array without slices module
+	l := len(p.Vertices) / 2
+	for i := 0; i < l; i++ {
+		tmp := p.Vertices[len(p.Vertices) - i - 1]
+		p.Vertices[len(p.Vertices) - i - 1] = p.Vertices[i]
+		p.Vertices[i] = tmp
+	}
 	p.Plane.Flip()
 }
