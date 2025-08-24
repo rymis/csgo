@@ -1,5 +1,5 @@
 module github.com/rymis/csgo
 
-go 1.22.2
+go 1.20
 
 require github.com/go-gl/mathgl v1.2.0 // indirect
