@@ -123,6 +123,10 @@ func (m *Model) Hull(other *Model) *Model {
 		addFace(f)
 	}
 
+	for _, f := range other.Faces {
+		addFace(f)
+	}
+
 	if len(idx.Data) < 4 {
 		return NewModel()
 	}
