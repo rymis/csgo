@@ -2,7 +2,6 @@ package csgo
 
 import (
 	"fmt"
-	"slices"
 )
 
 // Simple implementation of Ear-Cut algorithm.
@@ -79,7 +78,7 @@ func TriangulatePolygon(polygon []Vec2) ([]EarcutTriangle, error) {
 				res = append(res, t)
 
 				k := (i + 1) % len(idx)
-				idx = slices.Delete(idx, k, k+1)
+				idx = append(idx[:k], idx[k + 1:]...)
 
 				break
 			}
