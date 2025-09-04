@@ -1,9 +1,19 @@
 package csgo
 
 import (
+	"encoding/binary"
 	"fmt"
 	"io"
+	"io/ioutil"
+	"regexp"
+	"strconv"
 )
+
+const floatingPointRx = `([-+0-9.eE]+)`
+const vectorRx = floatingPointRx + `\s+` + floatingPointRx + `\s` + floatingPointRx
+var facetRx = regexp.MustCompile(`^\s*facet\s+normal\s+` + vectorRx + `\s+outer\s+loop\s+vertex\s+` + vectorRx + `\s+vertex\s+` + vectorRx + `\s+vertex\s+` + vectorRx + `\s+endloop\s+endfacet`)
+var solidRx = regexp.MustCompile(`^\s*solid\s+([_a-zA-Z][_a-zA-Z0-9]*)`)
+var endsolidRx = regexp.MustCompile(`^\s*endsolid`)
 
 // Save model to STL file
 func SaveStl(w io.Writer, model *Model) error {
@@ -25,33 +35,57 @@ func SaveStl(w io.Writer, model *Model) error {
 }
 
 // Save binary STL model to writer
-/*
-public static void SaveBin(Model m, System.IO.BinaryWriter w)
-{
+func SaveStlBin(w io.Writer, m *Model) error {
 	// First write header:
-	var header = new byte[80];
-	string text = "ScadView Model\n";
-	for (int i = 0; i < text.Length; ++i) {
-		header[i] = (byte)text[i];
+	header := make([]byte, 80)
+	text := []byte("ScadView Model\n")
+	copy(header[:len(text)], text)
+
+	_, err := w.Write(header) // 80 bytes header
+	if err != nil {
+		return err
 	}
 
-	w.Write(header);          // 80 bytes header
-	w.Write((uint)m.Count()); // number of triangles
-	var writeVec = (Linalg.Vec3 v) => {
-		w.Write(v.X);
-		w.Write(v.Y);
-		w.Write(v.Z);
+	err = binary.Write(w, binary.LittleEndian, uint32(len(m.Faces)))
+	if err != nil {
+		return err
+	}
+
+	writeVec := func (v Vec3) error {
+		for i := 0; i < 3; i++ {
+			err := binary.Write(w, binary.LittleEndian, v[0])
+			if err != nil {
+				return err
+			}
+		}
+
+		return nil
 	};
 
 	// Triangles:
-	for (int i = 0; i < m.Count(); ++i) {
-		var f = m.GetFace(i);
-		var n = f.Normal();
-		writeVec(n);
-		writeVec(f.Vertices[0]);
-		writeVec(f.Vertices[1]);
-		writeVec(f.Vertices[2]);
-		w.Write((short)0);
+	for _, f := range m.Faces {
+		n := f.Normal()
+
+		err = writeVec(n)
+		if err != nil {
+			return err
+		}
+		err = writeVec(f.Vertices[0].Position)
+		if err != nil {
+			return err
+		}
+		err = writeVec(f.Vertices[1].Position)
+		if err != nil {
+			return err
+		}
+		err = writeVec(f.Vertices[2].Position)
+		if err != nil {
+			return err
+		}
+		err = binary.Write(w, binary.LittleEndian, uint16(0))
+		if err != nil {
+			return err
+		}
 		// TODO:
 		// The VisCAM and SolidView software packages use the two "attribute byte count"
 		// bytes at the end of every triangle to store a 15-bit RGB color:
@@ -60,5 +94,66 @@ public static void SaveBin(Model m, System.IO.BinaryWriter w)
 		//   bits 10–14 are the intensity level for red (0–31),
 		//   bit 15 is 1 if the color is valid, or 0 if the color is not valid (as with normal STL files).
 	}
+
+	return nil
 }
-*/
+
+// Load model from STL textual format
+func LoadStlText(r io.Reader) (*Model, error) {
+	var x [12]float32
+	res := NewModel()
+	data, err := ioutil.ReadAll(r)
+	if err != nil {
+		return nil, err
+	}
+
+	indices := solidRx.FindSubmatchIndex(data)
+	if indices == nil {
+		return nil, fmt.Errorf("Invalid model format")
+	}
+
+	name := string(data[indices[2]:indices[3]])
+	if name == "facet" { // No name present
+		data = data[indices[2]:]
+	} else {
+		data = data[indices[3]:]
+	}
+
+	// Load facets:
+	for {
+		if endsolidRx.Match(data) {
+			break
+		}
+
+		indices = facetRx.FindSubmatchIndex(data)
+		if indices == nil {
+			return nil, fmt.Errorf("Invalid STL model file format")
+		}
+
+		if len(indices) != 26 {
+			return nil, fmt.Errorf("Invalid STL model file format: %d", len(indices))
+		}
+
+		for i := 0; i < 12; i++ {
+			l := indices[i * 2 + 2]
+			r := indices[i * 2 + 3]
+			if l < 0 || r < 0 {
+				return nil, fmt.Errorf("Invalid STL model file format")
+			}
+
+			val := data[l: r]
+			xx, err := strconv.ParseFloat(string(val), 32)
+			if err != nil {
+				return nil, err
+			}
+			x[i] = float32(xx)
+		}
+
+		f := NewFace(Vec3{x[3], x[4], x[5]}, Vec3{x[6], x[7], x[8]}, Vec3{x[9], x[10], x[11]})
+		res.AddFace(f)
+
+		data = data[indices[1]:]
+	}
+
+	return res, nil
+}
