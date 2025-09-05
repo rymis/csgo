@@ -4,7 +4,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"regexp"
 	"strconv"
 )
@@ -17,6 +16,11 @@ var endsolidRx = regexp.MustCompile(`^\s*endsolid`)
 
 // Save model to STL file
 func SaveStl(w io.Writer, model *Model) error {
+	return SaveStlBin(w, model)
+}
+
+// Save model to STL file in textual format
+func SaveStlText(w io.Writer, model *Model) error {
 	// TODO: error handling
 	fmt.Fprintln(w, "solid ScadSharp")
 	for _, f := range model.Faces {
@@ -53,7 +57,7 @@ func SaveStlBin(w io.Writer, m *Model) error {
 
 	writeVec := func (v Vec3) error {
 		for i := 0; i < 3; i++ {
-			err := binary.Write(w, binary.LittleEndian, v[0])
+			err := binary.Write(w, binary.LittleEndian, v[i])
 			if err != nil {
 				return err
 			}
@@ -102,7 +106,7 @@ func SaveStlBin(w io.Writer, m *Model) error {
 func LoadStlText(r io.Reader) (*Model, error) {
 	var x [12]float32
 	res := NewModel()
-	data, err := ioutil.ReadAll(r)
+	data, err := io.ReadAll(r)
 	if err != nil {
 		return nil, err
 	}
@@ -156,4 +160,126 @@ func LoadStlText(r io.Reader) (*Model, error) {
 	}
 
 	return res, nil
+}
+
+// Load binary STL model
+func LoadStlBin(r io.Reader) (*Model, error) {
+	res := NewModel()
+
+	// First write header:
+	header := make([]byte, 80)
+
+	_, err := r.Read(header)
+	if err != nil {
+		return nil, err
+	}
+
+	var cnt uint32
+	err = binary.Read(r, binary.LittleEndian, &cnt)
+	if err != nil {
+		return nil, err
+	}
+
+	readVec := func () (Vec3, error) {
+		var x Vec3
+		for i := 0; i < 3; i++ {
+			err := binary.Read(r, binary.LittleEndian, &x[i])
+			if err != nil {
+				return x, err
+			}
+		}
+
+		return x, nil
+	}
+
+	readFace := func () (*Face, error) {
+		n, err := readVec()
+		if err != nil {
+			return nil, err
+		}
+
+		a, err := readVec()
+		if err != nil {
+			return nil, err
+		}
+
+		b, err := readVec()
+		if err != nil {
+			return nil, err
+		}
+
+		c, err := readVec()
+		if err != nil {
+			return nil, err
+		}
+
+		var col uint16
+		err = binary.Read(r, binary.LittleEndian, &col)
+		if err != nil {
+			return nil, err
+		}
+
+		return NewFaceWithNormals(a, n, b, n, c, n), nil
+	}
+
+	// Triangles:
+	for i := uint32(0); i < cnt; i++ {
+		f, err := readFace()
+		if err != nil {
+			return nil, err
+		}
+
+		res.AddFace(f)
+	}
+
+	return res, nil
+}
+
+type catReader struct {
+	Buf []byte
+	R io.Reader
+}
+
+func (cr *catReader) Read(buf []byte) (int, error) {
+	if cr.Buf != nil {
+		l := 0
+		for ; l < len(cr.Buf) && l < len(buf); l++ {
+			buf[l] = cr.Buf[l]
+		}
+
+		if l == len(cr.Buf) {
+			cr.Buf = nil
+		} else {
+			cr.Buf = cr.Buf[l:]
+			return l, nil
+		}
+
+		if l < len(buf) {
+			ll, err := cr.R.Read(buf[l:])
+			ll += l
+			return ll, err
+		}
+
+		return l, nil
+	}
+
+	return cr.R.Read(buf)
+}
+
+// Detect format and load model
+func LoadStl(r io.Reader) (*Model, error) {
+	var buf [6]byte
+	_, err := r.Read(buf[:])
+	if err != nil {
+		return nil, err
+	}
+
+	r2 := &catReader{buf[:], r}
+
+	if buf[0] == 115 && buf[1] == 111 && buf[2] == 108 && buf[3] == 105 && buf[4] == 100 && buf[5] == 32 {
+		// "solid "
+		return LoadStlText(r2)
+	}
+
+	return LoadStlBin(r2)
 }
